@@ -11,15 +11,15 @@ Please also read the Additional BSD Notice below.
 
 Redistribution and use in source and binary forms, with or without modification,
 are permitted provided that the following conditions are met:
-â* Redistributions of source code must retain the above copyright notice, this
+* Redistributions of source code must retain the above copyright notice, this
    list of conditions and the disclaimer below.
-â* Redistributions in binary form must reproduce the above copyright notice,
+* Redistributions in binary form must reproduce the above copyright notice,
    this list of conditions and the disclaimer (as noted below) in the documentation
    and/or other materials provided with the distribution.
-â* Neither the name of the LLNL nor the names of its contributors may be used to
+* Neither the name of the LLNL nor the names of its contributors may be used to
    endorse or promote products derived from this software without specific prior
    written permission.
-â* 
+* 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -72,6 +72,46 @@ char  hostname[256];
 char* hostnames;
 
 char VERS[] = "1.5";
+
+#ifdef _USE_ROCM_
+
+#ifndef __HIP_PLATFORM_HCC__
+#  define __HIP_PLATFORM_HCC__
+#endif
+#include <hip/hip_runtime_api.h>
+
+#include <assert.h>
+#define HIP_CHECK(stmt)\
+  do {\
+    hipError_t hip_err;\
+    hip_err = (stmt);\
+    if (hipSuccess != hip_err) {\
+      fprintf(stderr, "[%s:%d] HIP call '%s' failed with 0x%x: %s\n",\
+                      __FILE__, __LINE__, #stmt, hip_err, hipGetErrorString(hip_err));\
+      exit(EXIT_FAILURE);\
+    }\
+    assert(hipSuccess == hip_err);\
+  } while (0)
+
+static int get_local_rank()
+{
+  char *str = NULL;
+  int local_rank = -1;
+
+  if ((str = getenv("MV2_COMM_WORLD_LOCAL_RANK")) != NULL) {
+    local_rank = atoi(str);
+  } else if ((str = getenv("OMPI_COMM_WORLD_LOCAL_RANK")) != NULL) {
+    local_rank = atoi(str);
+  } else if ((str = getenv("LOCAL_RANK")) != NULL) {
+    local_rank = atoi(str);
+  } else {
+    fprintf(stderr, "Warning: failed to identify the local rank iD.\n");
+  }
+
+  return local_rank;
+}
+
+#endif /* _USE_ROCM_ */
 
 /* =============================================================
  * TIMER MACROS
@@ -138,9 +178,28 @@ void code(int mypid, int nnodes, int size, int times, int window)
    */
   int i, j, k, w;
 
+#ifdef _USE_ROCM_
+  int dev_id = 0, dev_count = 0, local_rank = -1;
+
+  local_rank = get_local_rank();
+  if (local_rank >= 0) {
+    HIP_CHECK(hipGetDeviceCount(&dev_count));
+    dev_id = local_rank % dev_count;
+  }
+  HIP_CHECK(hipInit(0));
+  //printf("%d:%d:%d\n", mypid, local_rank, dev_id);
+  HIP_CHECK(hipSetDevice(dev_id));
+#endif /* _USE_ROCM_ */
+
   /* allocate memory for all of the messages */
-  char* send_message = (char*) malloc(window*size);
-  char* recv_message = (char*) malloc(window*size);
+  char *send_message, *recv_message;
+#ifdef _USE_ROCM_
+  HIP_CHECK(hipMalloc((void **)&send_message, (window*size)));
+  HIP_CHECK(hipMalloc((void **)&recv_message, (window*size)));
+#else
+  send_message = (char*) malloc(window*size);
+  recv_message = (char*) malloc(window*size);
+#endif
   MPI_Status*  status_array  = (MPI_Status*)  malloc(sizeof(MPI_Status) *window*2);
   MPI_Request* request_array = (MPI_Request*) malloc(sizeof(MPI_Request)*window*2);
   double* sendtimes = (double*) malloc(sizeof(double)*times*nnodes);
@@ -318,8 +377,13 @@ void code(int mypid, int nnodes, int size, int times, int window)
   }
   free(sendsums);
   free(recvsums);
+#ifdef _USE_ROCM_
+  HIP_CHECK(hipFree(send_message));
+  HIP_CHECK(hipFree(recv_message));
+#else
   free(send_message);
   free(recv_message);
+#endif
   free(status_array);
   free(request_array);
   free(sendtimes);

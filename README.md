@@ -3,6 +3,7 @@ Benchmark to generate network bandwidth images
 
 ## Build 
     make
+    make rocm=1 (to test ROCm GPUDirect bandwidth)
 
 ## Run
 Run one MPI task per node:
