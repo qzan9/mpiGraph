@@ -19,7 +19,7 @@ are permitted provided that the following conditions are met:
 * Neither the name of the LLNL nor the names of its contributors may be used to
    endorse or promote products derived from this software without specific prior
    written permission.
-* 
+*
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
 ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
 WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -68,15 +68,20 @@ Additional BSD Notice
 #include <mpi.h>
 #include <sys/resource.h>
 /*#include "print_mpi_resources.h"*/
+
 char  hostname[256];
 char* hostnames;
 
 char VERS[] = "1.5";
 
+/* =============================================================
+ * ROCM MACROS
+ * =============================================================
+ */
 #ifdef _USE_ROCM_
 
 #ifndef __HIP_PLATFORM_HCC__
-#  define __HIP_PLATFORM_HCC__
+# define __HIP_PLATFORM_HCC__
 #endif
 #include <hip/hip_runtime_api.h>
 
@@ -92,24 +97,6 @@ char VERS[] = "1.5";
     }\
     assert(hipSuccess == hip_err);\
   } while (0)
-
-static int get_local_rank()
-{
-  char *str = NULL;
-  int local_rank = -1;
-
-  if ((str = getenv("MV2_COMM_WORLD_LOCAL_RANK")) != NULL) {
-    local_rank = atoi(str);
-  } else if ((str = getenv("OMPI_COMM_WORLD_LOCAL_RANK")) != NULL) {
-    local_rank = atoi(str);
-  } else if ((str = getenv("LOCAL_RANK")) != NULL) {
-    local_rank = atoi(str);
-  } else {
-    fprintf(stderr, "Warning: failed to identify the local rank iD.\n");
-  }
-
-  return local_rank;
-}
 
 #endif /* _USE_ROCM_ */
 
@@ -155,7 +142,6 @@ double g_timeval__start, g_timeval__end_send, g_timeval__end_recv;
 
 #endif /* of USE_GETTIMEOFDAY */
 
-
 /* =============================================================
  * MAIN TIMING LOGIC
  * Uses a ring-based (aka. shift-based) algorithm.
@@ -169,7 +155,7 @@ double g_timeval__start, g_timeval__end_send, g_timeval__end_recv;
  */
 void code(int mypid, int nnodes, int size, int times, int window)
 {
-  /* arguments are: 
+  /* arguments are:
    *   mypid  = rank of this process
    *   nnodes = number of ranks
    *   size   = message size in bytes
@@ -178,33 +164,23 @@ void code(int mypid, int nnodes, int size, int times, int window)
    */
   int i, j, k, w;
 
-#ifdef _USE_ROCM_
-  int dev_id = 0, dev_count = 0, local_rank = -1;
-
-  local_rank = get_local_rank();
-  if (local_rank >= 0) {
-    HIP_CHECK(hipGetDeviceCount(&dev_count));
-    dev_id = local_rank % dev_count;
-  }
-  HIP_CHECK(hipInit(0));
-  //printf("%d:%d:%d\n", mypid, local_rank, dev_id);
-  HIP_CHECK(hipSetDevice(dev_id));
-#endif /* _USE_ROCM_ */
-
-  /* allocate memory for all of the messages */
+  /* allocate buffers for all of the messages */
   char *send_message, *recv_message;
 #ifdef _USE_ROCM_
+  HIP_CHECK(hipInit(0));
+  HIP_CHECK(hipSetDevice(0));
   HIP_CHECK(hipMalloc((void **)&send_message, (window*size)));
   HIP_CHECK(hipMalloc((void **)&recv_message, (window*size)));
 #else
   send_message = (char*) malloc(window*size);
   recv_message = (char*) malloc(window*size);
-#endif
+#endif /* _USE_ROCM_ */
+
+  /* allocate buffers for MPI communication */
   MPI_Status*  status_array  = (MPI_Status*)  malloc(sizeof(MPI_Status) *window*2);
   MPI_Request* request_array = (MPI_Request*) malloc(sizeof(MPI_Request)*window*2);
   double* sendtimes = (double*) malloc(sizeof(double)*times*nnodes);
   double* recvtimes = (double*) malloc(sizeof(double)*times*nnodes);
-      
   int* message_tags = (int*) malloc(window*sizeof(int));
   for (i=0;i<window;i++) { message_tags[i] = i; }
 
@@ -213,7 +189,7 @@ void code(int mypid, int nnodes, int size, int times, int window)
   while (distance < nnodes) {
     /* this test can run for a long time, so print progress to screen as we go */
     float progress = (float) distance / (float) nnodes * 100.0;
-    if (mypid == 0) {
+    if (0 == mypid) {
       printf("%d of %d (%0.1f%%)\n", distance, nnodes, progress);
       fflush(stdout);
     }
@@ -239,8 +215,8 @@ void code(int mypid, int nnodes, int size, int times, int window)
       /* fire off a window of isends to my send partner distance steps to my right */
       for (w=0; w<window; w++) {
         k=k+1;
-        MPI_Isend(&send_message[w*size], size, MPI_BYTE, 
-                  sendpid, message_tags[w], MPI_COMM_WORLD, &request_array[k]); 
+        MPI_Isend(&send_message[w*size], size, MPI_BYTE,
+                  sendpid, message_tags[w], MPI_COMM_WORLD, &request_array[k]);
       }
       /* time sends and receives separately */
       int flag_sends = 0;
@@ -266,7 +242,7 @@ void code(int mypid, int nnodes, int size, int times, int window)
   } /* end distance loop */
 
   /* for each node, compute sum of my bandwidths with that node */
-  if(mypid == 0) printf("Gathering results\n");
+  if(0 == mypid) printf("Gathering results\n");
   double* sendsums = (double*) malloc(sizeof(double)*nnodes);
   double* recvsums = (double*) malloc(sizeof(double)*nnodes);
   for(j=0; j<nnodes; j++) {
@@ -283,14 +259,14 @@ void code(int mypid, int nnodes, int size, int times, int window)
 
   /* gather send bw sums to rank 0 */
   double* allsums;
-  if (mypid == 0) {
+  if (0 == mypid) {
     allsums = (double*) malloc(sizeof(double)*nnodes*nnodes);
   }
   MPI_Barrier(MPI_COMM_WORLD);
   MPI_Gather(sendsums, nnodes, MPI_DOUBLE, allsums, nnodes, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   /* rank 0 computes send stats and prints result */
-  if (mypid == 0) {
+  if (0 == mypid) {
     /* compute stats over all nodes */
     double sendsum = 0.0;
     double sendmin = 10000000000000000.0;
@@ -333,7 +309,7 @@ void code(int mypid, int nnodes, int size, int times, int window)
   MPI_Gather(recvsums, nnodes, MPI_DOUBLE, allsums, nnodes, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
   /* rank 0 computes recv stats and prints result */
-  if (mypid == 0) {
+  if (0 == mypid) {
     /* compute stats over all nodes */
     double recvsum = 0.0;
     double recvmin = 10000000000000000.0;
@@ -375,8 +351,14 @@ void code(int mypid, int nnodes, int size, int times, int window)
   if (mypid == 0) {
     free(allsums);
   }
+  free(hostnames);
   free(sendsums);
   free(recvsums);
+  free(message_tags);
+  free(status_array);
+  free(request_array);
+  free(sendtimes);
+  free(recvtimes);
 #ifdef _USE_ROCM_
   HIP_CHECK(hipFree(send_message));
   HIP_CHECK(hipFree(recv_message));
@@ -384,11 +366,6 @@ void code(int mypid, int nnodes, int size, int times, int window)
   free(send_message);
   free(recv_message);
 #endif
-  free(status_array);
-  free(request_array);
-  free(sendtimes);
-  free(recvtimes);
-  free(message_tags);
 
   return;
 }
@@ -407,7 +384,7 @@ int main(int argc, char **argv)
   MPI_Init(&argc,&argv);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &ranks);
-       
+
   /* collect hostnames of all the processes */
   gethostname(hostname, sizeof(hostname));
   hostnames = (char*) malloc(sizeof(hostname)*ranks);
@@ -427,7 +404,7 @@ int main(int argc, char **argv)
   args[2] = window;
 
   /* print the header */
-  if (rank == 0) {
+  if (0 == rank) {
     /* mark start of output */
     printf("START mpiGraph v%s\n", VERS);
     printf("MsgSize\t%d\nTimes\t%d\nWindow\t%d\n",size,times,window);
@@ -441,14 +418,15 @@ int main(int argc, char **argv)
 
   /* print memory usage */
 /*
-  if(rank == 0) { printf("\n"); }
+  if(0 == rank) { printf("\n"); }
   print_mpi_resources();
 */
 
   /* mark end of output */
-  if (rank == 0) { printf("END mpiGraph\n"); }
+  if (0 == rank) { printf("END mpiGraph\n"); }
 
   /* shut down */
   MPI_Finalize();
   return 0;
 }
+
