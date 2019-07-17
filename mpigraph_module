@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+# clean up default OMPI and ICC setup
+[ -z ${OLD_PATH} ]  || PATH=${OLD_PATH}
+[ -z ${OLD_CPATH} ] || CPATH=${OLD_CPATH}
+[ -z ${OLD_LIBRARY_PATH} ]    || LIBRARY_PATH=${OLD_LIBRARY_PATH}
+[ -z ${OLD_LD_LIBRARY_PATH} ] || LD_LIBRARY_PATH=${OLD_LD_LIBRARY_PATH}
+for var in $(/usr/bin/env | /usr/bin/grep HPCX_ | /usr/bin/cut -f1 -d=)\
+           $(/usr/bin/env | /usr/bin/grep  UCX_ | /usr/bin/cut -f1 -d=)\
+           MPI_HOME OSHMEM_HOME SHMEM_HOME OMPI_HOME OPAL_PREFIX; do
+	unset ${var}
+done
+PATH=${PATH/\/opt\/hpc\/soft*intel64}
+CPATH=${CPATH/\/opt\/hpc\/soft*include}
+LIBRARY_PATH=${LIBRARY_PATH/\/opt\/hpc\/soft*intel64}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH/\/opt\/hpc\/soft*intel64}
+
+# intra-node topology
+local_rank=${OMPI_COMM_WORLD_LOCAL_RANK}
+numa_id=${local_rank}
+gpu_id=${local_rank}
+ib_id=mlx5_${local_rank}:1
+
+# HPCX - v2.4.0 build w/ ROCm support
+source /opt/hpc/software/mpi/hpcx/v2.4.0_ga/hpcx-rocm-mt-init-ompi.sh
+hpcx_load
+
+# MPI setup
+export OMPI_MCA_pml=ucx
+	export OMPI_MCA_btl=^vader,openib
+export UCX_TLS=shm,rc_x,dc_x,rocm_cpy,rocm_ipc
+	export UCX_DC_MLX5_TIMEOUT=999999.99us
+	export UCX_DC_MLX5_NUM_DCI=16
+export UCX_NET_DEVICES=${ib_id}
+	export UCX_IB_ADDR_TYPE=ib_global
+	export UCX_IB_GID_INDEX=auto
+	export UCX_IB_PCI_BW=${ib_id//:1/:50Gbps}
+export UCX_RNDV_SCHEME=get_zcopy
+	export UCX_RNDV_THRESH=16383
+	export UCX_ZCOPY_THRESH=16383
+	export UCX_MAX_EAGER_LANES=1
+	export UCX_MAX_RNDV_LANES=1
+export UCX_LOG_LEVEL=FATAL
+export OMPI_MCA_coll_hcoll_enable=0
+
+# HSA/HIP setup
+export HSA_ENABLE_SDMA=1
+	export HSA_USERPTR_FOR_PAGED_MEM=1
+export HIP_VISIBLE_DEVICES=${gpu_id}
+	export HIP_MEMCPY2D_FORCE_SDMA=1
+	export HIP_EVENT_SYS_RELEASE=0
+
+# HIP/HCC profiling
+#case ${OMPI_COMM_WORLD_RANK} in
+#0|1|2|3)
+#	export HCC_PROFILE=2;;
+#esac
+
+# execute mpiGraph
+mpigraph="${PWD}/mpiGraph 1048576 1024 64"
+/usr/bin/numactl --cpunodebind=${numa_id} --membind=${numa_id} ${mpigraph}
