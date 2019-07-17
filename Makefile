@@ -1,9 +1,7 @@
 TEST      := mpiGraph
 
-PREFIX    ?=
 OMPI_PATH ?=
 ROCM_PATH ?=
-INSTL_DIR ?=
 
 CXX       := g++
 CXXFLAGS  := -O2
@@ -30,11 +28,6 @@ build: $(TEST)
 
 $(TEST): %: %.o
 	$(LINK) $(LDFLAGS) -o $@ $+ $(LIBRARIES)
-
-.PHONY: install
-install:
-	/usr/bin/install -d $(INSTL_DIR)
-	/usr/bin/install -m 0755 $(TEST) $(INSTL_DIR)
 
 .PHONY: clean
 clean:
