@@ -5,6 +5,8 @@ Benchmark to generate network bandwidth images
     make
     make rocm=1 (to test ROCm GPUDirect bandwidth)
 
+Note that `-march=znver1` compiler option requires gcc version >= `6.5`.
+
 ## Run
 Run one MPI task per node:
 
